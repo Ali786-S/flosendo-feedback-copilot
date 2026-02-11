@@ -12,6 +12,8 @@ from fastapi import UploadFile, File
 import os, secrets
 import hashlib
 from datetime import timedelta
+import smtplib
+from email.mime.text import MIMEText
 # password reset rate limit to prevent abuse of passowrd resetting
 RESET_RATE_LIMIT_SECONDS = 20
 
@@ -160,6 +162,34 @@ RESET_TOKEN_MINUTES = 30
 def sha256_hex(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
+def send_reset_email(to_email: str, reset_url: str):
+    gmail_user = os.getenv("GMAIL_USER")
+    gmail_password = os.getenv("GMAIL_APP_PASSWORD")
+
+    if not gmail_user or not gmail_password:
+        raise ValueError("Missing Gmail environment variables")
+
+    subject = "Password Reset Request"
+
+    html_content = f"""
+    <p>Hello,</p>
+    <p>You requested a password reset.</p>
+    <p>Click below to reset your password:</p>
+    <p><a href="{reset_url}">{reset_url}</a></p>
+    <p>This link expires in 30 minutes.</p>
+    """
+
+    msg = MIMEText(html_content, "html")
+    msg["Subject"] = subject
+    msg["From"] = gmail_user
+    msg["To"] = to_email
+
+    with smtplib.SMTP("smtp.gmail.com", 587) as server:
+        server.starttls()
+        server.login(gmail_user, gmail_password)
+        server.send_message(msg)
+
+
 @app.post("/auth/forgot")
 async def forgot_password(request: Request):
     _reset_rate_limit(request)
@@ -193,9 +223,12 @@ async def forgot_password(request: Request):
     conn.commit()
     conn.close()
 
-    # return reset link as JSON
-    print(f"[RESET LINK for {email}] http://127.0.0.1:8000/reset?token={token}")
+    # returns reset link via email
+    base_url = os.getenv("BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+    reset_url = f"{base_url}/reset?token={token}"
+    send_reset_email(email, reset_url)
     return {"ok": True}
+
 
 
 @app.post("/auth/reset")
@@ -816,52 +849,3 @@ async def chat(request: Request):
     reply = mock_chat_response(mode, message, context)
     return {"ok": True, "reply": reply}
 
-@app.get("/api/teacher/review/{submission_id}")
-def get_teacher_review(request: Request, submission_id: int):
-    require_role(request, {"teacher", "admin"})
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT submission_id, flagged, note, updated_at FROM teacher_reviews WHERE submission_id = ?",
-        (submission_id,),
-    )
-    row = cur.fetchone()
-    conn.close()
-
-    if not row:
-        return {"submission_id": submission_id, "flagged": 0, "note": "", "updated_at": None}
-
-    return {
-        "submission_id": row["submission_id"],
-        "flagged": int(row["flagged"] or 0),
-        "note": row["note"] or "",
-        "updated_at": row["updated_at"],
-    }
-
-
-@app.post("/api/teacher/review/{submission_id}")
-async def save_teacher_review(request: Request, submission_id: int):
-    require_role(request, {"teacher", "admin"})
-    body = await request.json()
-
-    flagged = 1 if body.get("flagged") else 0
-    note = (body.get("note") or "").strip()
-    if len(note) > 2000:
-        raise HTTPException(status_code=400, detail="Note too long (max 2000 chars)")
-
-    now = datetime.utcnow().isoformat()
-
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO teacher_reviews (submission_id, flagged, note, updated_at)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(submission_id) DO UPDATE SET
-          flagged=excluded.flagged,
-          note=excluded.note,
-          updated_at=excluded.updated_at
-    """, (submission_id, flagged, note, now))
-    conn.commit()
-    conn.close()
-
-    return {"ok": True}
