@@ -1,3 +1,4 @@
+import email
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -226,8 +227,12 @@ async def forgot_password(request: Request):
     # returns reset link via email
     base_url = os.getenv("BASE_URL", "http://127.0.0.1:8000").rstrip("/")
     reset_url = f"{base_url}/reset?token={token}"
-    send_reset_email(email, reset_url)
+    try:
+     send_reset_email(email, reset_url)
+    except Exception as e:
+     print("EMAIL ERROR:", e)
     return {"ok": True}
+
 
 
 
