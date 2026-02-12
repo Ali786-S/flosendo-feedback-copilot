@@ -14,3 +14,4 @@ starlette==0.50.0
 typing_extensions==4.15.0
 typing-inspection==0.4.2
 uvicorn==0.40.0
+requests==2.31.0
